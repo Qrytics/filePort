@@ -4,10 +4,11 @@
  * table.
  *
  * Supported commands:
- *   ls [path]     – list files/directories at [path] (defaults to cwd)
- *   cd <path>     – change the current virtual directory
- *   pwd           – print the current directory
- *   help          – show available commands
+ *   ls [path]          – list files/directories at [path] (defaults to cwd)
+ *   cd <path>          – change the current virtual directory
+ *   pwd                – print the current directory
+ *   edit <file>        – open a file in the full-screen editor
+ *   help               – show available commands
  *
  * Props:
  *   supabase  {SupabaseClient}  – configured Supabase client (required)
@@ -27,6 +28,7 @@ import {
 } from 'react-native';
 
 import { useRemoteFiles } from '../hooks/useRemoteFiles';
+import { FileEditor } from './FileEditor';
 import { resolvePath } from '../utils/pathUtils';
 
 // ── Line types and their corresponding styles ──────────────────────────────
@@ -51,13 +53,15 @@ export function TerminalCLI({ supabase, initialPath = '/', style }) {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  // When non-null, the FileEditor is rendered instead of the terminal.
+  const [editingFile, setEditingFile] = useState(null);
 
   const scrollRef = useRef(null);
   const nextId = useRef(4);
   // Keep a ref to the current input text so handleSubmit is never stale.
   const inputRef = useRef('');
 
-  const { listDirectory, checkDirectory } = useRemoteFiles(supabase);
+  const { listDirectory, checkDirectory, fetchFile, saveFile } = useRemoteFiles(supabase);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -125,6 +129,47 @@ export function TerminalCLI({ supabase, initialPath = '/', style }) {
     [addLine, checkDirectory]
   );
 
+  const cmdEdit = useCallback(
+    async (args, currentCwd) => {
+      if (!args[0]) {
+        addLine('edit: usage: edit <filename>', 'error');
+        return;
+      }
+
+      const targetPath = resolvePath(currentCwd, args[0]);
+      addLine(`Opening: ${targetPath}`, 'info');
+
+      const file = await fetchFile(targetPath);
+
+      if (file.is_directory) {
+        addLine(`edit: ${args[0]}: Is a directory`, 'error');
+        return;
+      }
+
+      setEditingFile({
+        path: file.path,
+        name: file.name,
+        content: file.content ?? '',
+      });
+    },
+    [addLine, fetchFile]
+  );
+
+  const handleEditorSave = useCallback(
+    async (newContent) => {
+      // Will throw on Supabase error — FileEditor displays the error inline.
+      await saveFile(editingFile.path, newContent);
+      addLine(`Saved: ${editingFile.path}`, 'info');
+      setEditingFile(null);
+    },
+    [editingFile, saveFile, addLine]
+  );
+
+  const handleEditorCancel = useCallback(() => {
+    addLine(`Cancelled edit: ${editingFile?.path}`, 'info');
+    setEditingFile(null);
+  }, [editingFile, addLine]);
+
   // ── Command dispatcher ───────────────────────────────────────────────────
 
   const runCommand = useCallback(
@@ -148,16 +193,21 @@ export function TerminalCLI({ supabase, initialPath = '/', style }) {
             await cmdCd(args, currentCwd, updateCwd);
             break;
 
+          case 'edit':
+            await cmdEdit(args, currentCwd);
+            break;
+
           case 'pwd':
             addLine(currentCwd, 'output');
             break;
 
           case 'help':
             addLine('Commands:', 'info');
-            addLine('  ls [path]   – list files and directories', 'output');
-            addLine('  cd <path>   – change directory (supports ..)', 'output');
-            addLine('  pwd         – print current directory', 'output');
-            addLine('  help        – show this message', 'output');
+            addLine('  ls [path]      – list files and directories', 'output');
+            addLine('  cd <path>      – change directory (supports ..)', 'output');
+            addLine('  edit <file>    – open a file in the editor', 'output');
+            addLine('  pwd            – print current directory', 'output');
+            addLine('  help           – show this message', 'output');
             break;
 
           default:
@@ -169,7 +219,7 @@ export function TerminalCLI({ supabase, initialPath = '/', style }) {
         setLoading(false);
       }
     },
-    [addLine, cmdLs, cmdCd]
+    [addLine, cmdLs, cmdCd, cmdEdit]
   );
 
   // ── Submit handler ───────────────────────────────────────────────────────
@@ -191,6 +241,19 @@ export function TerminalCLI({ supabase, initialPath = '/', style }) {
   }, [cwd, runCommand]);
 
   // ── Render ───────────────────────────────────────────────────────────────
+
+  // When a file is being edited, replace the terminal with the full-screen editor.
+  if (editingFile) {
+    return (
+      <FileEditor
+        filePath={editingFile.path}
+        fileName={editingFile.name}
+        initialContent={editingFile.content}
+        onSave={handleEditorSave}
+        onCancel={handleEditorCancel}
+      />
+    );
+  }
 
   return (
     <KeyboardAvoidingView

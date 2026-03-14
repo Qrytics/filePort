@@ -16,7 +16,7 @@ import { useRemoteFiles } from '../src/hooks/useRemoteFiles';
  * Build a chainable Supabase mock that ultimately resolves with `{ data, error }`.
  * Each query builder method (from, select, like, eq, order, single) returns `this`.
  */
-function makeSupabaseMock({ data = [], error = null } = {}) {
+function makeSupabaseMock({ data = [], error = null, updateError = null } = {}) {
   const builder = {
     data,
     error,
@@ -25,8 +25,9 @@ function makeSupabaseMock({ data = [], error = null } = {}) {
     eq: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     single: jest.fn().mockResolvedValue({ data: data[0] ?? null, error }),
+    update: jest.fn().mockReturnThis(),
     // When awaited, the query builder itself resolves
-    then: (resolve) => resolve({ data, error }),
+    then: (resolve) => resolve({ data, error: updateError ?? error }),
   };
 
   return {
@@ -177,5 +178,128 @@ describe('useRemoteFiles — checkDirectory', () => {
     });
 
     expect(supabase._builder.eq).toHaveBeenCalledWith('path', '/home/alice');
+  });
+});
+
+// ── fetchFile ──────────────────────────────────────────────────────────────
+
+describe('useRemoteFiles — fetchFile', () => {
+  test('returns the file record on success', async () => {
+    const fileRecord = {
+      path: '/home/alice/notes.txt',
+      name: 'notes.txt',
+      content: 'Hello!',
+      is_directory: false,
+    };
+    const supabase = makeSupabaseMock({ data: [fileRecord] });
+    const { result } = renderHook(() => useRemoteFiles(supabase));
+
+    let file;
+    await act(async () => {
+      file = await result.current.fetchFile('/home/alice/notes.txt');
+    });
+
+    expect(file).toEqual(fileRecord);
+  });
+
+  test('throws a descriptive error when file is not found (PGRST116)', async () => {
+    const supabase = makeSupabaseMock({
+      data: [],
+      error: { message: 'No rows', code: 'PGRST116' },
+    });
+    const { result } = renderHook(() => useRemoteFiles(supabase));
+
+    await expect(
+      act(async () => {
+        await result.current.fetchFile('/nonexistent.txt');
+      })
+    ).rejects.toThrow('/nonexistent.txt: No such file or directory');
+  });
+
+  test('throws the Supabase error message for other errors', async () => {
+    const supabase = makeSupabaseMock({
+      data: [],
+      error: { message: 'Permission denied', code: '42501' },
+    });
+    const { result } = renderHook(() => useRemoteFiles(supabase));
+
+    await expect(
+      act(async () => {
+        await result.current.fetchFile('/secret.txt');
+      })
+    ).rejects.toThrow('Permission denied');
+  });
+
+  test('queries the correct path with eq filter', async () => {
+    const supabase = makeSupabaseMock({
+      data: [{ path: '/a.txt', name: 'a.txt', content: '', is_directory: false }],
+    });
+    const { result } = renderHook(() => useRemoteFiles(supabase));
+
+    await act(async () => {
+      await result.current.fetchFile('/a.txt');
+    });
+
+    expect(supabase._builder.eq).toHaveBeenCalledWith('path', '/a.txt');
+  });
+});
+
+// ── saveFile ───────────────────────────────────────────────────────────────
+
+describe('useRemoteFiles — saveFile', () => {
+  test('calls update with content and pending_sync: true', async () => {
+    const supabase = makeSupabaseMock({ data: [] });
+    const { result } = renderHook(() => useRemoteFiles(supabase));
+
+    await act(async () => {
+      await result.current.saveFile('/home/alice/notes.txt', 'Updated content');
+    });
+
+    expect(supabase._builder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Updated content',
+        pending_sync: true,
+      })
+    );
+  });
+
+  test('includes last_modified_mobile timestamp in the update', async () => {
+    const supabase = makeSupabaseMock({ data: [] });
+    const { result } = renderHook(() => useRemoteFiles(supabase));
+    const before = new Date();
+
+    await act(async () => {
+      await result.current.saveFile('/home/alice/notes.txt', 'x');
+    });
+
+    const [[updateArg]] = supabase._builder.update.mock.calls;
+    const ts = new Date(updateArg.last_modified_mobile);
+    expect(ts >= before).toBe(true);
+    expect(isNaN(ts.getTime())).toBe(false);
+  });
+
+  test('filters by the correct path with eq', async () => {
+    const supabase = makeSupabaseMock({ data: [] });
+    const { result } = renderHook(() => useRemoteFiles(supabase));
+
+    await act(async () => {
+      await result.current.saveFile('/home/alice/notes.txt', 'content');
+    });
+
+    expect(supabase._builder.eq).toHaveBeenCalledWith('path', '/home/alice/notes.txt');
+  });
+
+  test('throws when Supabase returns an error', async () => {
+    const supabase = makeSupabaseMock({
+      data: [],
+      updateError: { message: 'Write conflict' },
+    });
+    const { result } = renderHook(() => useRemoteFiles(supabase));
+
+    await expect(
+      act(async () => {
+        await result.current.saveFile('/home/alice/notes.txt', 'content');
+      })
+    ).rejects.toThrow('Write conflict');
   });
 });

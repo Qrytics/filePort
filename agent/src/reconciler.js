@@ -7,6 +7,15 @@
  *     1. Compare last_modified_mobile vs last_modified_local.
  *     2. If mobile is newer, overwrite the local file with DB content.
  *     3. Clear the needs_sync flag and update last_modified_local.
+ *
+ * Sync-flag semantics (PocketBase backend):
+ *   `needs_sync` — set by the agent when a local file changes (mobile reads this).
+ *                  Also cleared here after reconciliation.
+ *
+ * When the Supabase mobile backend is used instead of PocketBase, the mobile
+ * app additionally sets `pending_sync = true` on `remote_files` rows after the
+ * user saves an edit.  A future reconciler variant would query `pending_sync`
+ * to pull those mobile edits.  See mobile/src/hooks/useRemoteFiles.js.
  */
 
 const fs = require('fs');

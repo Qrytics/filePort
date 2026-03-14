@@ -11,7 +11,15 @@ import { TerminalCLI } from '../src/components/TerminalCLI';
 
 // ── Supabase mock ──────────────────────────────────────────────────────────
 
-function makeSupabaseMock({ lsData = [], checkIsDir = true, lsError = null, checkError = null } = {}) {
+function makeSupabaseMock({
+  lsData = [],
+  checkIsDir = true,
+  lsError = null,
+  checkError = null,
+  fileData = null,
+  fileError = null,
+  saveError = null,
+} = {}) {
   // The query builder for `.like(...)` calls (used by listDirectory).
   const listBuilder = {
     select: jest.fn().mockReturnThis(),
@@ -33,21 +41,28 @@ function makeSupabaseMock({ lsData = [], checkIsDir = true, lsError = null, chec
   return {
     from: jest.fn().mockImplementation((table) => {
       if (table !== 'remote_files') throw new Error(`Unexpected table: ${table}`);
-      // Return list builder for generic queries, check builder for single-row queries.
-      // We distinguish by whether `.single()` will be called.
       return {
-        select: jest.fn().mockImplementation(() => ({
+        select: jest.fn().mockImplementation((cols) => ({
           like: jest.fn().mockImplementation(() => ({
             order: jest.fn().mockImplementation(() => ({
               order: jest.fn().mockResolvedValue({ data: lsData, error: lsError }),
             })),
           })),
           eq: jest.fn().mockImplementation(() => ({
-            single: jest.fn().mockResolvedValue({
-              data: checkError ? null : { is_directory: checkIsDir },
-              error: checkError,
+            single: jest.fn().mockImplementation(() => {
+              // fetchFile selects 'content'; checkDirectory selects 'is_directory'
+              if (typeof cols === 'string' && cols.includes('content')) {
+                return Promise.resolve({ data: fileData, error: fileError });
+              }
+              return Promise.resolve({
+                data: checkError ? null : { is_directory: checkIsDir },
+                error: checkError,
+              });
             }),
           })),
+        })),
+        update: jest.fn().mockImplementation(() => ({
+          eq: jest.fn().mockResolvedValue({ data: null, error: saveError }),
         })),
       };
     }),
@@ -229,6 +244,132 @@ describe('TerminalCLI — cd command', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('terminal-prompt').props.children).toContain('/home');
+    });
+  });
+});
+
+describe('TerminalCLI — edit command', () => {
+  const FILE_RECORD = {
+    path: '/readme.txt',
+    name: 'readme.txt',
+    content: 'Hello, world!',
+    is_directory: false,
+  };
+
+  test('edit with no args shows usage error', async () => {
+    const supabase = makeSupabaseMock();
+    render(<TerminalCLI supabase={supabase} initialPath="/" />);
+
+    await submitCommand('edit');
+
+    await waitFor(() => {
+      expect(screen.getByText(/edit: usage: edit <filename>/)).toBeTruthy();
+    });
+  });
+
+  test('edit a file opens the FileEditor full-screen', async () => {
+    const supabase = makeSupabaseMock({ fileData: FILE_RECORD });
+    render(<TerminalCLI supabase={supabase} initialPath="/" />);
+
+    await submitCommand('edit readme.txt');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-editor')).toBeTruthy();
+      expect(screen.getByTestId('editor-filename').props.children).toBe('readme.txt');
+      expect(screen.getByTestId('editor-input').props.value).toBe('Hello, world!');
+    });
+  });
+
+  test('edit a directory shows an error', async () => {
+    const dirRecord = { ...FILE_RECORD, is_directory: true };
+    const supabase = makeSupabaseMock({ fileData: dirRecord });
+    render(<TerminalCLI supabase={supabase} initialPath="/" />);
+
+    await submitCommand('edit docs');
+
+    await waitFor(() => {
+      expect(screen.getByText(/Is a directory/)).toBeTruthy();
+      expect(screen.queryByTestId('file-editor')).toBeNull();
+    });
+  });
+
+  test('edit a non-existent file shows error', async () => {
+    const supabase = makeSupabaseMock({
+      fileError: { message: '/nope.txt: No such file or directory', code: 'PGRST116' },
+    });
+    render(<TerminalCLI supabase={supabase} initialPath="/" />);
+
+    await submitCommand('edit nope.txt');
+
+    await waitFor(() => {
+      expect(screen.getByText(/No such file or directory/)).toBeTruthy();
+      expect(screen.queryByTestId('file-editor')).toBeNull();
+    });
+  });
+
+  test('Cancel in editor returns to terminal', async () => {
+    const supabase = makeSupabaseMock({ fileData: FILE_RECORD });
+    render(<TerminalCLI supabase={supabase} initialPath="/" />);
+
+    await submitCommand('edit readme.txt');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-editor')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('editor-cancel'));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('file-editor')).toBeNull();
+      expect(screen.getByTestId('terminal-input')).toBeTruthy();
+    });
+  });
+
+  test('Save in editor calls saveFile and returns to terminal on success', async () => {
+    const supabase = makeSupabaseMock({ fileData: FILE_RECORD, saveError: null });
+    render(<TerminalCLI supabase={supabase} initialPath="/" />);
+
+    await submitCommand('edit readme.txt');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-editor')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.changeText(screen.getByTestId('editor-input'), 'New content');
+      fireEvent.press(screen.getByTestId('editor-save'));
+    });
+
+    await waitFor(() => {
+      // Editor is dismissed after a successful save.
+      expect(screen.queryByTestId('file-editor')).toBeNull();
+      // Terminal shows a confirmation line.
+      expect(screen.getByText(/Saved: \/readme\.txt/)).toBeTruthy();
+    });
+  });
+
+  test('Save error keeps editor open', async () => {
+    const supabase = makeSupabaseMock({
+      fileData: FILE_RECORD,
+      saveError: { message: 'Conflict' },
+    });
+    render(<TerminalCLI supabase={supabase} initialPath="/" />);
+
+    await submitCommand('edit readme.txt');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-editor')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('editor-save'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-editor')).toBeTruthy();
+      expect(screen.getByText(/Conflict/)).toBeTruthy();
     });
   });
 });

@@ -220,13 +220,17 @@ CREATE TABLE remote_files (
   is_directory         BOOLEAN DEFAULT FALSE,
   last_modified_local  TIMESTAMPTZ,
   last_modified_mobile TIMESTAMPTZ,
-  needs_sync           BOOLEAN DEFAULT FALSE,
+  needs_sync           BOOLEAN DEFAULT FALSE, -- agent → mobile: local file changed
+  pending_sync         BOOLEAN DEFAULT FALSE, -- mobile → agent: mobile edit ready to push
   file_size            INTEGER DEFAULT 0,
   mime_type            TEXT
 );
 CREATE INDEX ON remote_files (path);
 CREATE INDEX ON remote_files (needs_sync);
+CREATE INDEX ON remote_files (pending_sync);
 ```
+
+> **Sync flags:** `needs_sync` is set by the desktop agent when a local file changes (signalling to mobile that fresh content is available). `pending_sync` is set by the mobile app when the user saves an edit (signalling to the agent that mobile changes are ready to pull).
 
 #### Using the Component
 
@@ -256,6 +260,7 @@ export default function App() {
 |---------|-------------|
 | `ls [path]` | List files/directories (from `remote_files` table) |
 | `cd <path>` | Navigate the virtual directory (supports `..`, absolute paths) |
+| `edit <file>` | Open a file in the full-screen editor; Save sets `pending_sync = true` |
 | `pwd` | Print current directory |
 | `help` | Show available commands |
 
