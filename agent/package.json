@@ -1,0 +1,23 @@
+{
+  "name": "fileport-agent",
+  "version": "1.0.0",
+  "description": "Local-First Shadow File System — desktop agent",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "reconcile": "node src/index.js --reconcile-only",
+    "test": "jest --coverage"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "node-fetch": "^2.7.0",
+    "mime-types": "^2.1.35"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/__tests__/**/*.test.js"]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "watchedFolders": [
+    "~/Documents",
+    "~/Notes"
+  ],
+  "pocketbaseUrl": "http://127.0.0.1:8090",
+  "pocketbaseEmail": "admin@fileport.local",
+  "pocketbasePassword": "changeme",
+  "textExtensions": [
+    ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml",
+    ".sh", ".bash", ".zsh", ".html", ".css", ".xml", ".csv",
+    ".toml", ".ini", ".conf", ".log", ".rs", ".go", ".java",
+    ".c", ".cpp", ".h", ".hpp", ".rb", ".php", ".swift", ".kt"
+  ],
+  "reconcileIntervalMs": 10000,
+  "maxFileSizeBytes": 1048576
+}
