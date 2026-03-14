@@ -53,6 +53,7 @@ You interact with a synced database representation of your files, enabling offli
 | Agent / file watcher | Node.js + [Chokidar](https://github.com/paulmillr/chokidar) |
 | Database / sync layer | [PocketBase](https://pocketbase.io) (single-file SQLite backend) |
 | Mobile / web UI | [Xterm.js](https://xtermjs.org) + Express.js |
+| React Native mobile | React Native + [@supabase/supabase-js](https://supabase.com/docs/reference/javascript) |
 | Remote connectivity | [Tailscale](https://tailscale.com) (zero-config VPN) |
 
 ---
@@ -72,6 +73,24 @@ filePort/
 │   │   ├── indexer.test.js
 │   │   └── reconciler.test.js
 │   ├── config.example.json    # Copy to config.json and edit
+│   └── package.json
+│
+├── mobile/                    # React Native CLI component (Supabase)
+│   ├── src/
+│   │   ├── components/
+│   │   │   └── TerminalCLI.jsx     # Terminal UI: ls, cd, pwd, help
+│   │   ├── hooks/
+│   │   │   └── useRemoteFiles.js   # Supabase query hook
+│   │   ├── lib/
+│   │   │   └── supabase.js         # Supabase client factory
+│   │   └── utils/
+│   │       └── pathUtils.js        # Path resolution utilities
+│   ├── __tests__/             # Jest + @testing-library/react-native tests
+│   │   ├── pathUtils.test.js
+│   │   ├── useRemoteFiles.test.jsx
+│   │   └── TerminalCLI.test.jsx
+│   ├── .env.example           # SUPABASE_URL + SUPABASE_ANON_KEY
+│   ├── babel.config.js
 │   └── package.json
 │
 ├── ui/                        # Web terminal UI
@@ -184,9 +203,65 @@ sudo tailscale up
 
 The Web UI will feel like an SSH session to your file system.
 
+### 5. React Native Mobile Component (Supabase)
+
+The `mobile/` package provides a self-contained **TerminalCLI** React Native component that connects directly to **Supabase** (instead of PocketBase) to power an alternative mobile experience.
+
+#### Supabase Setup
+
+Create a Supabase project at [supabase.com](https://supabase.com) and run the following SQL to create the `remote_files` table:
+
+```sql
+CREATE TABLE remote_files (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  path                 TEXT UNIQUE NOT NULL,
+  name                 TEXT NOT NULL,
+  content              TEXT,
+  is_directory         BOOLEAN DEFAULT FALSE,
+  last_modified_local  TIMESTAMPTZ,
+  last_modified_mobile TIMESTAMPTZ,
+  needs_sync           BOOLEAN DEFAULT FALSE,
+  file_size            INTEGER DEFAULT 0,
+  mime_type            TEXT
+);
+CREATE INDEX ON remote_files (path);
+CREATE INDEX ON remote_files (needs_sync);
+```
+
+#### Using the Component
+
+```bash
+cd mobile
+cp .env.example .env   # fill in SUPABASE_URL and SUPABASE_ANON_KEY
+npm install
+```
+
+```jsx
+import { createSupabaseClient } from './src/lib/supabase';
+import { TerminalCLI } from './src/components/TerminalCLI';
+
+const supabase = createSupabaseClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
+export default function App() {
+  return <TerminalCLI supabase={supabase} initialPath="/" />;
+}
+```
+
+#### Mobile Terminal Commands
+
+| Command | Description |
+|---------|-------------|
+| `ls [path]` | List files/directories (from `remote_files` table) |
+| `cd <path>` | Navigate the virtual directory (supports `..`, absolute paths) |
+| `pwd` | Print current directory |
+| `help` | Show available commands |
+
 ---
 
-## 🖥 Web Terminal Commands
+
 
 | Command | Description |
 |---------|-------------|
@@ -214,11 +289,18 @@ Every `reconcileIntervalMs` milliseconds the agent:
 ## 🧪 Running Tests
 
 ```bash
+# Agent (Node.js)
 cd agent
+npm test
+
+# Mobile React Native component
+cd mobile
 npm test
 ```
 
-Tests cover the **indexer** (file scanning, record building) and **reconciler** (conflict resolution, file writing).
+Agent tests cover the **indexer** (file scanning, record building) and **reconciler** (conflict resolution, file writing).
+
+Mobile tests cover **pathUtils** (pure path logic), **useRemoteFiles** (Supabase hook with mocked client), and **TerminalCLI** (component rendering and command handling via `@testing-library/react-native`).
 
 ---
 

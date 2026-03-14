@@ -1,0 +1,48 @@
+{
+  "name": "fileport-mobile",
+  "version": "1.0.0",
+  "description": "filePort — React Native terminal CLI component backed by Supabase",
+  "main": "src/components/TerminalCLI.jsx",
+  "scripts": {
+    "test": "jest --coverage"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.73.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.24.0",
+    "@babel/preset-react": "^7.23.3",
+    "@testing-library/react-native": "^13.3.3",
+    "babel-jest": "^29.7.0",
+    "babel-plugin-syntax-hermes-parser": "^0.34.0",
+    "jest": "^29.7.0",
+    "metro-react-native-babel-preset": "^0.77.0",
+    "react": "18.3.1",
+    "react-native": "0.76.0",
+    "react-test-renderer": "18.3.1"
+  },
+  "jest": {
+    "preset": "react-native",
+    "transform": {
+      "^.+\\.(js|jsx|ts|tsx)$": "babel-jest"
+    },
+    "transformIgnorePatterns": [
+      "node_modules/(?!(@supabase|react-native|@react-native|@react-native-community|@testing-library)/)"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.test.{js,jsx}"
+    ],
+    "moduleFileExtensions": [
+      "js",
+      "jsx",
+      "ts",
+      "tsx",
+      "json"
+    ]
+  }
+}
