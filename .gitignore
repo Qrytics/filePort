@@ -6,3 +6,9 @@ pocketbase/pocketbase
 pocketbase/pb_data/
 coverage/
 .DS_Store
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+htmlcov/
+.coverage

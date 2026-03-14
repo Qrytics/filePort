@@ -78,7 +78,8 @@ filePort/
 ├── mobile/                    # React Native CLI component (Supabase)
 │   ├── src/
 │   │   ├── components/
-│   │   │   └── TerminalCLI.jsx     # Terminal UI: ls, cd, pwd, help
+│   │   │   ├── TerminalCLI.jsx     # Terminal UI: ls, cd, pwd, edit, help
+│   │   │   └── FileEditor.jsx      # Full-screen dark-mode text editor
 │   │   ├── hooks/
 │   │   │   └── useRemoteFiles.js   # Supabase query hook
 │   │   ├── lib/
@@ -88,10 +89,18 @@ filePort/
 │   ├── __tests__/             # Jest + @testing-library/react-native tests
 │   │   ├── pathUtils.test.js
 │   │   ├── useRemoteFiles.test.jsx
-│   │   └── TerminalCLI.test.jsx
+│   │   ├── TerminalCLI.test.jsx
+│   │   └── FileEditor.test.jsx
 │   ├── .env.example           # SUPABASE_URL + SUPABASE_ANON_KEY
 │   ├── babel.config.js
 │   └── package.json
+│
+├── sync/                      # Python Supabase pending_sync poller
+│   ├── supabase_sync.py       # Polling script (runs every 60 s by default)
+│   ├── .env.example           # SUPABASE_URL + SUPABASE_SERVICE_KEY
+│   ├── requirements.txt       # supabase, python-dotenv
+│   └── tests/
+│       └── test_supabase_sync.py  # pytest unit tests (fully mocked)
 │
 ├── ui/                        # Web terminal UI
 │   ├── server.js              # Express server (proxies PocketBase calls)
@@ -266,6 +275,46 @@ export default function App() {
 
 ---
 
+### 6. Python Supabase Sync Poller
+
+The `sync/` package provides a lightweight Python script that runs on the desktop and polls the Supabase `remote_files` table every 60 seconds.  Whenever it finds a row with `pending_sync = true` (written there by the mobile app after a file save), it:
+
+1. Reads the `content` column from the database.
+2. Overwrites the local file at `path` with that content (creating parent directories if needed).
+3. Clears `pending_sync` and stamps `last_modified_local` in the database.
+
+This completes the mobile-→-desktop sync direction without requiring the Node.js agent.
+
+#### Setup
+
+```bash
+cd sync
+cp .env.example .env
+# Edit .env and fill in SUPABASE_URL and SUPABASE_SERVICE_KEY
+# (use the service-role key so the script can bypass RLS)
+
+pip install -r requirements.txt
+python supabase_sync.py
+```
+
+#### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SUPABASE_URL` | Your Supabase project URL (`https://<ref>.supabase.co`) |
+| `SUPABASE_SERVICE_KEY` | Service-role key (never expose this publicly) |
+| `POLL_INTERVAL_SECONDS` | Polling cadence in seconds (default: `60`) |
+
+#### Running Tests
+
+```bash
+cd sync
+pip install -r requirements.txt pytest
+python -m pytest tests/ -v
+```
+
+---
+
 
 
 | Command | Description |
@@ -301,11 +350,18 @@ npm test
 # Mobile React Native component
 cd mobile
 npm test
+
+# Python Supabase sync poller
+cd sync
+pip install -r requirements.txt pytest
+python -m pytest tests/ -v
 ```
 
 Agent tests cover the **indexer** (file scanning, record building) and **reconciler** (conflict resolution, file writing).
 
-Mobile tests cover **pathUtils** (pure path logic), **useRemoteFiles** (Supabase hook with mocked client), and **TerminalCLI** (component rendering and command handling via `@testing-library/react-native`).
+Mobile tests cover **pathUtils** (pure path logic), **useRemoteFiles** (Supabase hook with mocked client), **TerminalCLI** (component rendering and command handling via `@testing-library/react-native`), and **FileEditor** (full-screen editor component).
+
+Python tests cover **fetch_pending**, **write_file**, **clear_pending**, **process_row**, and **run_sync_cycle** — all with a fully mocked Supabase client and a temporary directory for filesystem operations.
 
 ---
 
