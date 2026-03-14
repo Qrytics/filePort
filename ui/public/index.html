@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>filePort — Terminal</title>
+
+  <!-- Xterm.js CDN -->
+  <link  rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #1a1a2e;
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #333;
+    }
+
+    header .logo {
+      font-size: 1.1rem;
+      font-weight: bold;
+      color: #7ec8e3;
+      letter-spacing: 2px;
+    }
+
+    header .subtitle {
+      font-size: 0.75rem;
+      color: #888;
+    }
+
+    header .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4caf50;
+      margin-left: auto;
+      box-shadow: 0 0 6px #4caf50;
+    }
+
+    header .status-dot.error { background: #f44336; box-shadow: 0 0 6px #f44336; }
+
+    #terminal-container {
+      flex: 1;
+      padding: 8px;
+      overflow: hidden;
+    }
+
+    /* editor overlay */
+    #editor-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #111;
+      flex-direction: column;
+      z-index: 10;
+    }
+
+    #editor-overlay.active { display: flex; }
+
+    #editor-toolbar {
+      background: #1a1a2e;
+      padding: 6px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid #333;
+    }
+
+    #editor-filename {
+      color: #7ec8e3;
+      font-size: 0.85rem;
+      font-weight: bold;
+    }
+
+    #editor-toolbar button {
+      margin-left: auto;
+      padding: 4px 14px;
+      border: 1px solid;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: inherit;
+    }
+
+    #btn-save   { background: #4caf50; color: #000; border-color: #4caf50; }
+    #btn-cancel { background: transparent; color: #aaa; border-color: #555; }
+
+    #btn-save:hover   { background: #66bb6a; }
+    #btn-cancel:hover { color: #fff; border-color: #aaa; }
+
+    #editor-textarea {
+      flex: 1;
+      background: #111;
+      color: #e0e0e0;
+      border: none;
+      resize: none;
+      padding: 16px;
+      font-family: inherit;
+      font-size: 0.9rem;
+      line-height: 1.6;
+      outline: none;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">filePort</span>
+  <span class="subtitle">Local-First Shadow File System</span>
+  <span class="status-dot" id="status-dot" title="Connected"></span>
+</header>
+
+<div id="terminal-container"></div>
+
+<!-- Editor overlay -->
+<div id="editor-overlay">
+  <div id="editor-toolbar">
+    <span id="editor-filename"></span>
+    <button id="btn-save">💾 Save</button>
+    <button id="btn-cancel">✕ Cancel</button>
+  </div>
+  <textarea id="editor-textarea" spellcheck="false"></textarea>
+</div>
+
+<script>
+// ── Terminal setup ─────────────────────────────────────────────────────────
+
+const term = new Terminal({
+  theme: {
+    background: '#0d0d0d',
+    foreground: '#e0e0e0',
+    cursor: '#7ec8e3',
+    selectionBackground: '#264f78',
+    black:   '#000000', red:     '#f44336', green:   '#4caf50', yellow:  '#ffeb3b',
+    blue:    '#2196f3', magenta: '#9c27b0', cyan:    '#00bcd4', white:   '#e0e0e0',
+    brightBlack:   '#555', brightRed:   '#ef9a9a', brightGreen: '#a5d6a7',
+    brightYellow:  '#fff59d', brightBlue: '#90caf9', brightMagenta: '#ce93d8',
+    brightCyan:    '#80deea', brightWhite: '#ffffff',
+  },
+  cursorBlink: true,
+  fontFamily: "'Fira Code', 'Cascadia Code', Consolas, monospace",
+  fontSize: 15,
+  lineHeight: 1.4,
+  scrollback: 2000,
+});
+
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal-container'));
+fitAddon.fit();
+window.addEventListener('resize', () => fitAddon.fit());
+
+// ── State ──────────────────────────────────────────────────────────────────
+
+let cwd = '/';           // current virtual directory
+let inputBuffer = '';    // characters typed so far on the current line
+let editingPath = null;  // path currently open in the editor overlay
+let commandHistory = []; // previously entered commands
+let historyIndex = -1;   // position in command history (for arrow-up/down)
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+const GREEN  = '\x1b[32m';
+const CYAN   = '\x1b[36m';
+const YELLOW = '\x1b[33m';
+const RED    = '\x1b[31m';
+const BLUE   = '\x1b[34m';
+const RESET  = '\x1b[0m';
+const BOLD   = '\x1b[1m';
+
+function prompt() {
+  term.write(`\r\n${GREEN}fileport${RESET}:${CYAN}${cwd}${RESET}$ `);
+  inputBuffer = '';
+  historyIndex = -1;
+}
+
+function writeln(text) {
+  term.write('\r\n' + text);
+}
+
+function setStatusDot(ok) {
+  const dot = document.getElementById('status-dot');
+  dot.classList.toggle('error', !ok);
+  dot.title = ok ? 'Connected' : 'Error';
+}
+
+// ── API calls ──────────────────────────────────────────────────────────────
+
+async function apiLs(dirPath) {
+  const res = await fetch(`/api/ls?path=${encodeURIComponent(dirPath)}`);
+  setStatusDot(res.ok);
+  return res.json();
+}
+
+async function apiCat(filePath) {
+  const res = await fetch(`/api/cat?path=${encodeURIComponent(filePath)}`);
+  setStatusDot(res.ok);
+  return res.json();
+}
+
+async function apiSave(filePath, content) {
+  const res = await fetch('/api/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath, content }),
+  });
+  setStatusDot(res.ok);
+  return res.json();
+}
+
+// ── Command handlers ───────────────────────────────────────────────────────
+
+const HELP_TEXT = `
+${BOLD}Available commands:${RESET}
+  ${CYAN}ls [path]${RESET}          List files and directories
+  ${CYAN}cd <path>${RESET}          Change directory  (use .. for parent)
+  ${CYAN}cat <file>${RESET}         Print file content
+  ${CYAN}edit <file>${RESET}        Open file in editor; ${YELLOW}:save${RESET} to sync, ${YELLOW}:q${RESET} to quit
+  ${CYAN}pwd${RESET}                Print current directory
+  ${CYAN}clear${RESET}              Clear the terminal
+  ${CYAN}help${RESET}               Show this help message
+`;
+
+async function cmdLs(args) {
+  const target = args[0] ? resolvePath(args[0]) : cwd;
+  writeln(`${BLUE}${target}${RESET}`);
+  writeln('─'.repeat(Math.min(target.length, 60)));
+
+  const items = await apiLs(target);
+  if (items.error) { writeln(`${RED}Error: ${items.error}${RESET}`); return; }
+  if (!items.length) { writeln('(empty)'); return; }
+
+  for (const item of items) {
+    if (item.is_directory) {
+      writeln(`  ${CYAN}📁 ${item.name}/${RESET}`);
+    } else {
+      const size = item.file_size > 0 ? ` ${formatBytes(item.file_size)}` : '';
+      const sync = item.needs_sync ? ` ${YELLOW}[pending sync]${RESET}` : '';
+      writeln(`     ${item.name}${RESET}${size}${sync}`);
+    }
+  }
+}
+
+async function cmdCd(args) {
+  if (!args[0]) { writeln(`${RED}Usage: cd <path>${RESET}`); return; }
+  const target = resolvePath(args[0]);
+  // Verify the path exists and is a directory.
+  const items = await apiLs(target);
+  if (items.error) { writeln(`${RED}${args[0]}: ${items.error}${RESET}`); return; }
+  cwd = target;
+}
+
+async function cmdCat(args) {
+  if (!args[0]) { writeln(`${RED}Usage: cat <file>${RESET}`); return; }
+  const filePath = resolvePath(args[0]);
+  const record = await apiCat(filePath);
+  if (record.error) { writeln(`${RED}${record.error}${RESET}`); return; }
+
+  writeln(`${BLUE}── ${record.name} ──${RESET}`);
+  const lines = (record.content || '').split('\n');
+  for (const line of lines) writeln(line);
+}
+
+async function cmdEdit(args) {
+  if (!args[0]) { writeln(`${RED}Usage: edit <file>${RESET}`); return; }
+  const filePath = resolvePath(args[0]);
+  const record = await apiCat(filePath);
+  if (record.error) { writeln(`${RED}${record.error}${RESET}`); return; }
+
+  editingPath = filePath;
+  document.getElementById('editor-filename').textContent = filePath;
+  document.getElementById('editor-textarea').value = record.content || '';
+  document.getElementById('editor-overlay').classList.add('active');
+  document.getElementById('editor-textarea').focus();
+}
+
+// ── Editor overlay events ──────────────────────────────────────────────────
+
+document.getElementById('btn-save').addEventListener('click', async () => {
+  if (!editingPath) return;
+  const content = document.getElementById('editor-textarea').value;
+  const result = await apiSave(editingPath, content);
+  if (result.error) {
+    alert(`Save failed: ${result.error}`);
+    return;
+  }
+  closeEditor();
+  writeln(`${GREEN}✔ Saved and marked for sync: ${editingPath}${RESET}`);
+  prompt();
+});
+
+document.getElementById('btn-cancel').addEventListener('click', () => {
+  closeEditor();
+  writeln(`${YELLOW}Edit cancelled.${RESET}`);
+  prompt();
+});
+
+function closeEditor() {
+  editingPath = null;
+  document.getElementById('editor-overlay').classList.remove('active');
+  term.focus();
+}
+
+// ── Path resolution ────────────────────────────────────────────────────────
+
+function resolvePath(input) {
+  if (input.startsWith('/')) return normalizePath(input);
+  if (input === '..') {
+    const parts = cwd.split('/').filter(Boolean);
+    parts.pop();
+    return '/' + parts.join('/');
+  }
+  if (input.startsWith('..')) {
+    return resolvePath('..' + input.slice(2));
+  }
+  return normalizePath(cwd.replace(/\/$/, '') + '/' + input);
+}
+
+function normalizePath(p) {
+  const parts = p.split('/').filter(Boolean);
+  const stack = [];
+  for (const part of parts) {
+    if (part === '..') stack.pop();
+    else if (part !== '.') stack.push(part);
+  }
+  return '/' + stack.join('/');
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+// ── Input handling ─────────────────────────────────────────────────────────
+
+term.onData((data) => {
+  const code = data.charCodeAt(0);
+
+  if (code === 13) { // Enter
+    const line = inputBuffer.trim();
+    if (line) commandHistory.unshift(line);
+    historyIndex = -1;
+    inputBuffer = '';
+    handleCommand(line);
+    return;
+  }
+
+  if (code === 127) { // Backspace
+    if (inputBuffer.length > 0) {
+      inputBuffer = inputBuffer.slice(0, -1);
+      term.write('\b \b');
+    }
+    return;
+  }
+
+  if (data === '\x1b[A') { // Arrow Up
+    if (historyIndex < commandHistory.length - 1) {
+      historyIndex++;
+      replaceInput(commandHistory[historyIndex]);
+    }
+    return;
+  }
+
+  if (data === '\x1b[B') { // Arrow Down
+    if (historyIndex > 0) {
+      historyIndex--;
+      replaceInput(commandHistory[historyIndex]);
+    } else if (historyIndex === 0) {
+      historyIndex = -1;
+      replaceInput('');
+    }
+    return;
+  }
+
+  if (code === 3) { // Ctrl-C
+    writeln('^C');
+    prompt();
+    return;
+  }
+
+  if (code === 12) { // Ctrl-L
+    term.clear();
+    prompt();
+    return;
+  }
+
+  // Printable character
+  inputBuffer += data;
+  term.write(data);
+});
+
+function replaceInput(newText) {
+  // Erase current input on the line then write newText
+  term.write('\r\x1b[K');
+  term.write(`${GREEN}fileport${RESET}:${CYAN}${cwd}${RESET}$ `);
+  term.write(newText);
+  inputBuffer = newText;
+}
+
+async function handleCommand(line) {
+  if (!line) { prompt(); return; }
+
+  const [cmd, ...args] = line.split(/\s+/);
+
+  switch (cmd) {
+    case 'ls':    await cmdLs(args);   break;
+    case 'cd':    await cmdCd(args);   break;
+    case 'cat':   await cmdCat(args);  break;
+    case 'edit':  await cmdEdit(args); break;
+    case 'pwd':   writeln(cwd);         break;
+    case 'clear': term.clear();         break;
+    case 'help':  writeln(HELP_TEXT);   break;
+    default:
+      writeln(`${RED}${cmd}: command not found. Type ${YELLOW}help${RED} for available commands.${RESET}`);
+  }
+
+  prompt();
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+
+term.writeln(`${BOLD}${CYAN}╔═══════════════════════════════════════╗${RESET}`);
+term.writeln(`${BOLD}${CYAN}║   filePort — Local-First Shadow FS    ║${RESET}`);
+term.writeln(`${BOLD}${CYAN}╚═══════════════════════════════════════╝${RESET}`);
+term.writeln(`Type ${YELLOW}help${RESET} for a list of commands.`);
+term.writeln('');
+
+// Start with root listing.
+(async () => {
+  await cmdLs(['/']);
+  prompt();
+})();
+</script>
+</body>
+</html>
